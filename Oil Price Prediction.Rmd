@@ -1,0 +1,683 @@
+---
+title: "Oil Price Prediction"
+author: "Sarvesh Naik"
+date: "2025-02-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE)
+```
+
+## Objective
+
+To provide one day ahead probabilistic forecast (not a point forecast) for the oil prices. 
+The requirement is to use the gamlss package in R (https://cran.r-project.org/web/packages/gamlss/gamlss.pdf) to forecast the probability distribution of the oil prices, where the variable “OILPRICE” is the response variable. 
+
+---
+
+## The Oil Dataset
+
+The oil dataset in R contains daily prices of the front month WTI (West Texas Intermediate) oil contract traded on the New York Mercantile Exchange (NYMEX). This dataset is used to analyze and model the factors influencing oil prices by examining other financially traded products.
+
+---
+
+#### Structure and Format
+- The dataset is a data frame with 1000 observations and 25 variables.
+- The response variable is **OILPRICE**, which represents the log price of the front month WTI oil contract. This contract, denoted as CL1, is the shortest-duration futures contract available for purchase on NYMEX.
+
+---
+
+#### Key Variables
+1. **OILPRICE:**
+   - The log price of the front month WTI oil contract (CL1).
+   - This is the dependent variable (response) that we're trying to model and predict.
+
+2. **CL2_log to CL15_log:**
+   - These are the log prices of WTI oil contracts for 2 to 15 months ahead.
+   - For example, CL2_log corresponds to the contract for delivery two months from the current month.
+   - These represent the oil futures curve, showing how market expectations about future oil prices evolve over time.
+
+3. **BDIY_log:**
+   - Baltic Dry Index (BDI) – measures the cost of shipping raw materials by sea.
+   - It is an indicator of global supply chain demand and economic activity.
+
+4. **SPX_log:**
+   - The S&P 500 Index, representing the stock performance of 500 large companies in the U.S.
+   - Used to gauge overall market sentiment and economic conditions.
+
+5. **DX1_log:**
+   - The US Dollar Index, which tracks the value of the U.S. dollar against a basket of other major currencies.
+   - Since oil is traded in USD, fluctuations in the dollar's value can impact oil prices.
+
+6. **GC1_log:**
+   - The log price of the front month gold contract on NYMEX.
+   - Gold is often considered a safe-haven asset, and its price movements can reflect risk sentiment.
+
+7. **HO1_log:**
+   - The log price of the front month heating oil contract on NYMEX.
+   - Used to analyze the relationship between energy products.
+
+8. **USCI_log:**
+   - The United States Commodity Index, representing a broad measure of commodity prices.
+
+9. **GNR_log:**
+   - The S&P Global Natural Resources Index, which tracks companies involved in natural resources.
+
+10. **SHCOMP_log:**
+    - The Shanghai Stock Exchange Composite Index, representing Chinese stock market performance.
+    - Useful for assessing global economic dynamics influencing oil demand.
+
+11. **FTSE_log:**
+    - The FTSE 100 Index, reflecting the performance of the largest companies listed on the London Stock Exchange.
+
+12. **respLAG:**
+    - The lag 1 of OILPRICE, showing the previous day's log price.
+    - This is used to model autoregressive behavior in oil prices.
+
+---
+
+## Loading required libraries
+
+```{r}
+
+library(gamlss)
+library(dplyr)
+library(ggplot2)
+library(tseries)
+library(forecast)
+library(zoo)
+library(plotly)
+library(shinythemes)
+library(corrplot)
+library(Hmisc)
+
+
+```
+
+---
+
+
+## Exploratory Data Analysis (EDA)
+
+
+```{r}
+
+df = oil[,-2:-15]
+head(df,3)
+
+```
+
+---
+
+#### Check for NAs
+
+```{r}
+
+sum(is.na(df))
+
+```
+
+
+---
+
+#### Exploring the response variable 
+
+```{r}
+
+# Create an index column
+df$index <- 1:nrow(df)
+
+# Plot Oil Price over Time with Trend Line
+ggplot(df) +
+  aes(x = index, y = OILPRICE) +
+  geom_line(size = 0.7, colour = "#EF562D") +
+  geom_smooth(method = "loess", colour = "#9BBEDB", se = FALSE) +
+  labs(title = 'Oil Price Over Time', x = 'Days', y = 'Oil Price') +
+  theme(plot.title = element_text(size = 15L, face = "bold", hjust = 0.5))
+
+
+```
+
+**We can observe that the response variable trends negatively over the given time period (here number of days).**
+
+---
+
+#### Exploring the variable distribution
+
+```{r}
+
+# Create individual histograms
+p1 <- ggplot(df) +
+  aes(x = BDIY_log) +
+  geom_histogram(bins = 30L, fill = "#71A1D0") +
+  labs(x = "Baltic Dry Index", y = '') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank())
+
+p2 <- ggplot(df) +
+  aes(x = SPX_log) +
+  geom_histogram(bins = 30L, fill = "#E99984") +
+  labs(x = "S&P 500 Index", y = '') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank())
+
+p3 <- ggplot(df) +
+  aes(x = DX1_log) +
+  geom_histogram(bins = 30L, fill = "#3FB23F") +
+  labs(x = "US Dollar Index", y = '') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank())
+
+p4 <- ggplot(df) +
+  aes(x = GC1_log) +
+  geom_histogram(bins = 30L, fill = "#064B84") +
+  labs(x = "Gold Price", y = '') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank())
+
+p5 <- ggplot(df) +
+  aes(x = HO1_log) +
+  geom_histogram(bins = 30L, fill = "#FF5F5F") +
+  labs(x = "Heating Oil Contract", y = '') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank())
+
+p6 <- ggplot(df) +
+  aes(x = USCI_log) +
+  geom_histogram(bins = 30L, fill = "#FBB663") +
+  labs(x = "US Commodity Index", y = '') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank())
+
+p7 <- ggplot(df) +
+  aes(x = GNR_log) +
+  geom_histogram(bins = 30L, fill = "#FBA3CF") +
+  labs(x = "S&P Global Natural Resources", y = '') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank())
+
+p8 <- ggplot(df) +
+  aes(x = SHCOMP_log) +
+  geom_histogram(bins = 30L, fill = "#EB99FF") +
+  labs(x = "Shanghai SE Composite", y = '') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank())
+
+p9 <- ggplot(df) +
+  aes(x = FTSE_log) +
+  geom_histogram(bins = 30L, fill = "#A699CD") +
+  labs(x = "FTSE 100", y = '') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank())
+
+p10 <- ggplot(df) +
+  aes(x = OILPRICE) +
+  geom_histogram(bins = 30L, fill = "#71A1D0") +
+  labs(x = "Oil Price", y = '') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank())
+
+p11 <- ggplot(df) +
+  aes(x = respLAG) +
+  geom_histogram(bins = 30L, fill = "#E99984") +
+  labs(x = "respLAG", y = '') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank())
+
+# Arrange the plots using gridExtra
+library(gridExtra)
+grid.arrange(
+  p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11,
+  ncol = 3,
+  top = "Distribution of Other Variables/ Covariates"
+)
+
+
+
+
+```
+
+**We see no clear indication of a normal distribution in these variables other than maybe the Baltic dry index.**
+
+---
+
+## Normality Test 
+
+- In this analysis, normality test is conducted to evaluate the distribution of variables influencing oil prices. The objective is to determine whether parametric models, which assume normally distributed residuals, are appropriate for modeling these relationships. If the normality assumption is violated, it may impact the accuracy of hypothesis testing and confidence intervals, leading to unreliable conclusions.
+
+- Despite initial observations showing that most variables do not exhibit a clear normal distribution (except possibly the Baltic Dry Index), conducting formal normality tests is crucial. This test will provide statistical evidence to confirm or refute the visual assessments. 
+
+
+```{r}
+
+# List of variables to test for normality
+vars <- c("BDIY_log", "SPX_log", "DX1_log", "GC1_log", "HO1_log", 
+          "USCI_log", "GNR_log", "SHCOMP_log", "FTSE_log", 
+          "OILPRICE", "respLAG")
+
+# Perform Shapiro-Wilk test
+normality_results <- sapply(vars, function(var) {
+  shapiro.test(oil[[var]])$p.value
+})
+
+# Print the results
+normality_results
+
+
+```
+
+**The p-values obtained from the normality tests for the variables are all extremely low (p < 0.05), indicating a significant deviation from normality. This confirms the initial observation that most variables do not follow a normal distribution, except for the Baltic Dry Index, which was visually closer to normality but still failed the test.** 
+
+---
+
+## Stationarity Test
+
+- We are conducting stationarity tests to ensure reliable modeling and avoid spurious correlations in our analysis of oil prices and financial indices. Time series models require stationary data for accurate forecasting, and identifying non-stationary series will help us apply appropriate transformations for robust analysis.
+
+We will perform the stationarity test using the Augmented Dickey-Fuller (ADF) test:
+
+```{r}
+
+# Perform ADF test for each variable 
+adf_results <- lapply(df, adf.test)
+
+# Display the results
+adf_results
+
+
+
+```
+
+
+- The variables in the dataset are already transformed with the Log transformations, applying more changes to these variables, would bring a complex interpretation of the dataset and a very generic prediction. The model accepts many distributions for the independent variables, it means that We will not transform our variables distributions. Prices have frequently asymmetric distributions, and they are well fitted in the GAMLSS. 
+
+
+---
+
+## Variables Correlation
+
+- As we have seen, the **variables don't follow a normal distribution**, so if we want to analyse a correlation metric, it will need a **non parametric** Correlation-test (Spearmen).
+
+
+
+```{r corrplot, echo=FALSE, fig.width=6, fig.height=6}
+
+corr_mat <- cor(df, method = "spearman")
+
+corrplot(corr_mat, 
+         method = "color",    
+         order = "hclust",    
+         addCoef.col = "black", 
+         tl.col = "black",    
+         tl.cex = 0.8,        
+         number.cex = 0.8,    
+         cl.cex = 0.8)       
+
+
+
+```
+
+We now have to check how significant these correlations are :
+
+```{r}
+
+matrix <- rcorr(as.matrix(df), type = "spearman")
+print(matrix$P)# P-value of the correlations
+
+```
+
+
+**The Spearman test evaluated the null hypothesis that the correlation between variables is zero (i.e., no correlation). In our analysis, the results were significant for all variables except FTSE. This suggests that only the FTSE variable has a correlation with OILPRICE that is close to zero, as visually confirmed in the correlation matrix. Therefore, we can conclude that all other variables show a statistically significant correlation with OILPRICE.**
+
+---
+
+## Distribution Selection
+
+- It is essential to explore all available distributions within the package to identify the one with the lowest non-parametric test values. We will evaluate different distributions, starting from the simplest and progressing to more complex ones, while comparing their statistical metrics to determine the best fit.
+ 
+```{r}
+
+# Power Exponential distribution
+histDist(df$OILPRICE, family=PE, density=TRUE)
+
+```
+
+```{r}
+# BCPE distribution
+histDist(df$OILPRICE, family = BCPE, density = TRUE)
+
+```
+
+```{r}
+# SEP3 distribution
+histDist(df$OILPRICE, family = SEP3, density = TRUE)
+
+```
+
+```{r}
+# SHASH distribution
+histDist(df$OILPRICE,family = SHASH ,density = TRUE)
+
+```
+
+**Comparing the 4 distributions, the last instance of SHASH is the best option because it has the lowest values for Global Deviance, AIC, and SBC (even negative, which indicates a very good fit). Negative AIC and SBC are rare and suggest an excellent fit.**
+
+---
+
+## Data Preparation
+
+- We will evaluate two models using two different datasets. 
+- The first dataset includes all variables, **excluding the FTSE variable** which has a negligible correlation with the response variable OILPRICE. 
+- The second dataset **excludes the respLAG variable** and the FTSE variable, focusing solely on **important index variables**. This approach enables us to build a model that relies entirely on external predictors, such as stock indices, without incorporating historical price information.
+
+
+
+```{r}
+
+# Remove the FTSE_log column from the dataframe to exclude the variable with low correlation to OILPRICE
+df_1 <- subset(df, select = -FTSE_log)
+
+# Remove the respLAG column to create a dataset with only external predictors (e.g., stock indices)
+df_2 <- subset(df_1, select = -respLAG)
+
+
+```
+
+- Splitting train and test data. **80 - 20 split**. 
+
+```{r}
+
+set.seed(123)
+
+sample_size_1 <- floor(0.8 * nrow(df_1))
+
+train_1 <- sample(seq_len(nrow(df_1)), size = sample_size_1)
+
+# Split df_1 into training and testing sets
+train_data_1 <- df_1[train_1, ]
+test_data_1 <- df_1[-train_1, ]
+
+
+sample_size_2 <- floor(0.8 * nrow(df_2))
+
+train_2 <- sample(seq_len(nrow(df_2)), size = sample_size_2)
+
+# Split df_2 into training and testing sets
+train_data_2 <- df_2[train_2, ]
+test_data_2 <- df_2[-train_2, ]
+
+
+
+```
+
+---
+
+## Model Building
+
+- Building the first model using the dataset df_1, which includes the lagged variable respLAG and excludes the low-correlation variable FTSE_log. The model is built using the SHASH distribution.
+
+```{r}
+
+model_1 <- gamlss(OILPRICE ~ ., family = SHASH, data = train_data_1)
+
+
+```
+
+---
+
+
+- Building the second model using the dataset df_2, which excludes the lagged variable respLAG and the low-correlation variable FTSE_log. The model is also built using the SHASH distribution.
+
+```{r}
+
+model_2 <- gamlss(OILPRICE ~ ., family = SHASH, data = train_data_2)
+
+
+```
+
+---
+
+
+## Comparing Model Performance
+
+```{r}
+
+# Display detailed summary for Model 1
+cat("Summary of Model 1:\n")
+summary(model_1)
+
+```
+
+```{r}
+
+# Display detailed summary for Model 2
+cat("\nSummary of Model 2:\n")
+summary(model_2)
+
+```
+
+```{r}
+
+# Residual Analysis
+
+plot(model_1)
+plot(model_2)
+
+```
+
+#### Comparison of Model Performance:
+
+Conclusion:
+
+- **Model 1 performs better than Model 2 on almost all criteria **(Global Deviance, AIC, SBC, kurtosis, and Filliben Correlation). Therefore, Model 1 is the better model. 
+- Model 1 likely performs better because it uses respLAG, which includes information about the previous day's OILPRICE. This helps the model understand how oil prices change over time.
+- In financial data, today’s prices are often influenced by yesterday’s prices. By using respLAG, Model 1 captures these patterns better than Model 2, which doesn’t have this information.
+
+---
+
+#### Prediction Accuracy
+
+Even after looking at the model summary and residuals, testing prediction accuracy is important because:  
+- **Generalization:** It checks if the model works well on new, unseen data, not just the training set.  
+- **Overfitting Detection:** A model might fit the training data perfectly but fail on new data. Testing accuracy helps spot this.  
+- **Real-World Use:** The goal is to make accurate predictions on future data, so testing accuracy shows how reliable the model is.  
+
+In short, testing prediction accuracy ensures the model is good not just for training data but also for real-world use.
+
+```{r}
+
+# Make predictions on the test set
+pred_model_1 <- predict(model_1, newdata = test_data_1, type = "response")
+pred_model_2 <- predict(model_2, newdata = test_data_2, type = "response")
+
+# Calculate accuracy metrics
+mae_model_1 <- mean(abs(pred_model_1 - test_data_1$OILPRICE))
+rmse_model_1 <- sqrt(mean((pred_model_1 - test_data_1$OILPRICE)^2))
+
+mae_model_2 <- mean(abs(pred_model_2 - test_data_2$OILPRICE))
+rmse_model_2 <- sqrt(mean((pred_model_2 - test_data_2$OILPRICE)^2))
+
+# Print accuracy metrics
+cat("Model 1 Accuracy:\n")
+cat("MAE:", mae_model_1, "\n")
+cat("RMSE:", rmse_model_1, "\n\n")
+
+cat("Model 2 Accuracy:\n")
+cat("MAE:", mae_model_2, "\n")
+cat("RMSE:", rmse_model_2, "\n")
+
+```
+
+- **Model 1 performs better than Model 2 based on both MAE and RMSE. This suggests that Model  1 is more accurate and reliable in predicting OILPRICE.**
+- **Model 2 shows higher errors, suggesting that its predictions are less accurate and more dispersed from the actual values.**
+
+---
+
+## Building new models with additive term 
+
+- To fit non-linear, non-parametric relationships or account for random effects, an additive term function is needed. In this context, smooth functions help capture complex patterns in the data.
+- After experimenting with various smoothing methods, cubic splines provided the best non-parametric fit. Cubic splines are powerful because they allow flexible modeling while maintaining smoothness.
+
+```{r}
+
+# Build Model 3 with cubic splines for selected variables. To see if there is any improvement in model 1 performance. 
+model_3 <- gamlss(
+  OILPRICE ~ cs(BDIY_log, df = 5) + cs(SPX_log, df = 5) + cs(DX1_log, df = 5) + 
+    cs(GC1_log, df = 5) + cs(HO1_log, df = 5) + cs(USCI_log, df = 5) + 
+    cs(GNR_log, df = 5) + cs(SHCOMP_log, df = 5),  
+  family = SHASH,
+  data = train_data_1
+)
+
+# Build Model 3 with cubic splines for selected variables. To see if there is any improvement in model 2 performance. 
+model_4 <- gamlss(
+  OILPRICE ~ cs(BDIY_log, df = 5) + cs(SPX_log, df = 5) + cs(DX1_log, df = 5) + 
+    cs(GC1_log, df = 5) + cs(HO1_log, df = 5) + cs(USCI_log, df = 5) + 
+    cs(GNR_log, df = 5) + cs(SHCOMP_log, df = 5),  
+  family = SHASH,
+  data = train_data_2
+)
+
+
+
+```
+
+```{r}
+
+# Display model summary
+summary(model_3)
+summary(model_4)
+
+```
+
+```{r}
+
+plot(model_3)
+plot(model_4)
+
+```
+
+```{r}
+
+# Make predictions on the test set
+pred_model_3 <- predict(model_3, newdata = test_data_1, type = "response")
+pred_model_4 <- predict(model_4, newdata = test_data_2, type = "response")
+
+mae_model_3 <- mean(abs(pred_model_3 - test_data_1$OILPRICE))
+rmse_model_3 <- sqrt(mean((pred_model_3 - test_data_1$OILPRICE)^2))
+mae_model_4 <- mean(abs(pred_model_4 - test_data_2$OILPRICE))
+rmse_model_4 <- sqrt(mean((pred_model_4 - test_data_2$OILPRICE)^2))
+
+
+cat("Model 3 Accuracy:\n")
+cat("MAE:", mae_model_3, "\n")
+cat("RMSE:", rmse_model_3, "\n\n")
+
+cat("Model 4 Accuracy:\n")
+cat("MAE:", mae_model_4, "\n")
+cat("RMSE:", rmse_model_4, "\n\n")
+
+
+```
+
+```{r}
+
+# Combine the MAE and RMSE for all four models
+mae_values <- c(mae_model_1, mae_model_2, mae_model_3, mae_model_4)
+rmse_values <- c(rmse_model_1, rmse_model_2, rmse_model_3, rmse_model_4)
+model_names <- c("Model 1", "Model 2", "Model 3", "Model 4")
+
+comparison_df <- data.frame(
+  Model = model_names,
+  MAE = mae_values,
+  RMSE = rmse_values
+)
+
+# Display the comparison table
+print(comparison_df)
+
+
+```
+
+#### Model Comparison after adding additive term/smoothening 
+
+-  **Model 1 has the best overall performance with the lowest MAE and RMSE. This indicates that the base model without cubic splines provides the most accurate predictions.**
+- Model 2 performs the worst, with the highest MAE and RMSE, showing that its structure isn't as effective as Model 1.
+- Model 3 (Model 1 + Cubic Splines) shows a decline in accuracy compared to Model 1, suggesting that the cubic spline terms added complexity without significant benefit.
+- Model 4 (Model 2 + Cubic Splines) improves upon Model 2, showing that the additive cubic splines help this model generalize better. However, it still doesn't outperform Model 1.
+
+
+---
+
+## Probabilistic Forecast
+
+- Selecting **Model 1** as the best model to provide one day ahead probabilistic forecast for the oil prices :
+
+```{r}
+
+# Calculate residuals and standard deviation of residuals
+residuals_model_1 <- test_data_1$OILPRICE - pred_model_1
+residual_sd <- sd(residuals_model_1)
+
+# critical value for 99% confidence interval
+critval <- 2.575
+
+upper_band <- pred_model_1 + (critval * residual_sd)
+lower_band <- pred_model_1 - (critval * residual_sd)
+
+plot_data <- data.frame(
+  Date = test_data_1$index,  
+  Actual = test_data_1$OILPRICE,
+  Predicted = pred_model_1,
+  Upper = upper_band,
+  Lower = lower_band
+)
+
+# Create the plot
+ggplot(plot_data, aes(x = Date)) +
+  geom_line(aes(y = Actual), color = "red", size = 1, linetype = "solid") +  # Actual values
+  geom_line(aes(y = Predicted), color = "green", size = 0.8) +  # Predicted values
+  geom_ribbon(aes(ymin = Lower, ymax = Upper), fill = "blue", alpha = 0.2) +  # Confidence interval
+  labs(
+    title = "Probabilistic Forecast with 99% Confidence Interval (Model 1)",
+    x = "Days",
+    y = "Oil Price"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "none"
+  )
+
+
+
+```
+
+**The blue shaded area shows the 99% confidence interval, indicating the range within which the actual oil price is expected to lie, 99% of the time. We can infer that actual values (red line) consistently fall within the confidence band, it suggests that the model's predictions are reliable.**
+
+---
+
+```{r}
+
+last_row <- tail(test_data_1, 1)
+
+next_day_pred <- predict(model_1, newdata = last_row, type = "response")
+
+# Display the prediction
+cat("Predicted Oil Price for the Next Day:", next_day_pred, "\n")
+
+next_day_actual <- tail(test_data_1$OILPRICE, 1)
+
+percent_deviation <- ((next_day_pred - next_day_actual) / next_day_actual) * 100
+
+# Display the percent deviation
+cat("Percent Deviation from True Value for the Next Day:", round(percent_deviation, 2), "%\n")
+
+
+
+```
+
+**A 0.7% deviation of predicted value to actual value indicates high predictive accuracy and effective pattern capture, suggesting the selected model is reliable, consistent, and generalizes well to unseen data.**
+
+---
